@@ -300,7 +300,6 @@ async function poll() {
     const res = await api.messages.getConversations({ count: 20, v: '5.199' });
     if (!res || !res.items) return;
 
-    // Process every conversation that has a new incoming message
     for (const item of res.items) {
       const msg = item.last_message || item;
       if (!msg || msg.out === 1) continue;
@@ -309,18 +308,45 @@ async function poll() {
       const peer = getPeer(msg.peer_id);
       if (msg.id <= peer.lastMsgId) continue;
 
-      // Mark as seen NOW — before processing, to prevent double-processing
-      peer.lastMsgId = msg.id;
+      // Known conversation → fetch history to catch messages sent between polls
+      // New conversation (lastMsgId set by initStartup) → just process last message
+      let messages = [{ id: msg.id, from_id: msg.from_id, text: msg.text || '', attachments: msg.attachments || [] }];
 
-      const text = (msg.text || '').trim();
-      const attachments = msg.attachments || [];
+      if (peer.lastMsgId > 0) {
+        try {
+          const histRes = await api.messages.getHistory({
+            peer_id: msg.peer_id,
+            count: 10,
+            v: '5.199',
+          });
+          if (histRes?.items?.length) {
+            const unprocessed = histRes.items.filter(m => !m.out && m.id > peer.lastMsgId).reverse();
+            if (unprocessed.length > 0) messages = unprocessed;
+          }
+        } catch (_) {}
+      }
 
-      // Skip obvious noise from new users
-      const hasAttach = attachments.length > 0;
-      if (text.startsWith('[') || (!text && !hasAttach)) continue;
+      // Mark all as seen BEFORE processing
+      for (const m of messages) {
+        if (m.id > peer.lastMsgId) peer.lastMsgId = m.id;
+      }
 
-      console.log('[MSG] peer=' + msg.peer_id + ' id=' + msg.id + ' step=' + peer.step + ' text="' + text.substring(0, 40) + '"');
-      await processMessage(msg.peer_id, msg.from_id, text, attachments);
+      console.log('[POLL] peer=' + msg.peer_id + ' new=' + messages.length + ' msgs step=' + peer.step);
+
+      for (const m of messages) {
+        const text = (m.text || '').trim();
+        const attachments = m.attachments || [];
+        const hasAttach = attachments.length > 0;
+
+        // Skip noise only for brand new peers
+        if (peer.step === 'start' && (text.startsWith('[') || (!text && !hasAttach))) {
+          console.log('[POLL] skipping noise');
+          continue;
+        }
+
+        console.log('[MSG] id=' + m.id + ' text="' + text.substring(0, 40) + '" step=' + peer.step + '/' + peer.step);
+        await processMessage(msg.peer_id, m.from_id, text, attachments);
+      }
     }
   } catch (e) {
     console.error('[POLL ERR]', e.message);

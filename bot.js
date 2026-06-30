@@ -16,34 +16,23 @@ const api = vk.api;
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
-const sessions = new Map();
-const SESSION_TTL = 30 * 60 * 1000; // 30 минут
+// Per-peer state: session (dialog step + data) + last processed message ID
+const peers = new Map();
 
-function getSession(userId) {
-  const existing = sessions.get(userId);
-  if (existing) {
-    // Проверяем, не протухла ли сессия
-    if (Date.now() - existing.ts > SESSION_TTL) {
-      sessions.delete(userId);
-    } else {
-      existing.ts = Date.now(); // продлеваем
-      return existing;
-    }
+function getPeer(peerId) {
+  let p = peers.get(peerId);
+  if (!p) {
+    p = { step: 'start', data: {}, lastMsgId: 0 };
+    peers.set(peerId, p);
   }
-  const session = { step: 'start', data: {}, ts: Date.now() };
-  sessions.set(userId, session);
-  return session;
+  return p;
 }
 
 function saveApplication(data) {
   const date = new Date().toISOString().split('T')[0];
   const file = path.join(DATA_DIR, `zayavki-${date}.json`);
-
   let apps = [];
-  if (fs.existsSync(file)) {
-    apps = JSON.parse(fs.readFileSync(file, 'utf-8'));
-  }
-
+  if (fs.existsSync(file)) apps = JSON.parse(fs.readFileSync(file, 'utf-8'));
   const entry = {
     id: apps.length + 1,
     date: new Date().toISOString(),
@@ -55,134 +44,91 @@ function saveApplication(data) {
     support: data.support,
     photos: data.photos || [],
   };
-
   apps.push(entry);
   fs.writeFileSync(file, JSON.stringify(apps, null, 2));
   return entry;
 }
 
-// Initialize with latest message to avoid re-processing old ones on restart
-let lastMessageId = 0;
-let initDone = false;
-// Track last processed message ID per conversation (peer_id)
-const conversationState = new Map();
+// ─── helpers ───────────────────────────────────────────────
 
-async function initLastMessageId() {
-  try {
-    // Загружаем все диалоги, чтобы после рестарта не переобработать старые сообщения
-    const response = await api.messages.getConversations({ count: 200, v: '5.199' });
-    if (response && response.items) {
-      for (const item of response.items) {
-        const msg = item.last_message || item;
-        if (msg && msg.id) {
-          conversationState.set(msg.peer_id, msg.id);
-          if (msg.id > lastMessageId) lastMessageId = msg.id;
-        }
-      }
-    }
-    console.log('[OK] VK API работает, токен валиден');
-    console.log('[OK] Загружено диалогов: ' + conversationState.size);
-  } catch (err) {
-    console.error('[ОШИБКА] VK API недоступен:', err.message);
-    if (err.code === 5) console.error('[ОШИБКА] Токен недействителен! Проверьте VK_TOKEN в Railway');
-    if (err.code === 15) console.error('[ОШИБКА] У токена нет прав на сообщения!');
-    console.error('Бот будет работать, но может не отвечать на сообщения');
-  }
-  initDone = true;
-  console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
-}
+function isValidName(t)  { return t.length >= 2 && /[а-яёa-z]/i.test(t); }
+function isValidAddress(t) { return t.length >= 5; }
+function isValidDesc(t)   { return t.length >= 5; }
 
 async function send(peerId, msg) {
-  const params = {
-    access_token: TOKEN,
-    v: '5.199',
-    peer_id: peerId,
-    message: msg,
-    random_id: Math.floor(Math.random() * 1000000),
-  };
-  try {
-    const res = await fetch('https://api.vk.com/method/messages.send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params).toString(),
-    });
-    const data = await res.json();
-    if (data.error) {
-      console.error('[SEND ERROR] peer=' + peerId + ' code=' + data.error.error_code + ' msg=' + data.error.error_msg);
-    } else {
-      console.log('[SEND] peer=' + peerId + ' ok msg=' + msg.substring(0, 40));
-    }
-  } catch (err) {
-    console.error('[SEND ERROR] peer=' + peerId + ' err=' + err.message);
+  const res = await fetch('https://api.vk.com/method/messages.send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      access_token: TOKEN,
+      v: '5.199',
+      peer_id: peerId,
+      message: msg,
+      random_id: Math.floor(Math.random() * 1000000),
+    }).toString(),
+  });
+  const data = await res.json();
+  if (data.error) {
+    console.error('[SEND ERR] peer=' + peerId + ' code=' + data.error.error_code + ' ' + data.error.error_msg);
+  } else {
+    console.log('[SEND] peer=' + peerId + ' ' + msg.substring(0, 50));
   }
 }
 
-function isValidName(text) {
-  return text.length >= 2 && /[а-яёa-z]/i.test(text);
-}
+// ─── dialog flow ───────────────────────────────────────────
 
-function isValidAddress(text) {
-  return text.length >= 5;
-}
+async function processMessage(peerId, userId, text, attachments) {
+  const peer = getPeer(peerId);
 
-function isValidDescription(text) {
-  return text.length >= 5;
-}
-
-async function processMessage(sessionKey, vkUserId, text, peerId, attachments) {
-  const session = getSession(sessionKey);
-
-  // Sticker-only message: re-prompt the current question
-  if (attachments && attachments.length > 0 && attachments.every(a => a.type === 'sticker') && !text) {
-    const prompts = {
-      'start': 'Напишите "Начать", чтобы оставить заявку.',
-      'name': 'Напишите ваше имя, пожалуйста.',
-      'address': 'Напишите адрес проблемы в Кирове.',
-      'problem': 'Напишите, какая проблема вас беспокоит.',
-      'idea': 'Напишите, что вы хотели бы видеть вместо этого.',
-      'media': 'Пришлите фото проблемного места или напишите "нет", если фото нет.',
-      'support': 'Напишите пару слов о поддержке соседей.',
-      'done': 'Напишите "да", если всё верно в заявке.',
-    };
-    const tip = prompts[session.step] || 'Напишите текстовое сообщение, пожалуйста.';
-    await send(peerId, '😊 Пожалуйста, напишите текстовое сообщение.\n\n' + tip);
-    return;
-  }
-
-  const greeting =
-    'Привет! Я — цифровой помощник проекта "Городские решения" партии "Новые люди" в Кирове.\n\n' +
-    'Помогу передать заявку на благоустройство города нашей команде.\n\n' +
-    'Для начала — как к вам обращаться? (Имя или как вас представить)';
-
+  // /start → reset
   if (text === '/start' || text === '/начать') {
-    session.step = 'name';
-    session.data = {};
-    await send(peerId, greeting);
+    peer.step = 'name';
+    peer.data = {};
+    await send(peerId,
+      'Привет! Я — цифровой помощник проекта "Городские решения" партии "Новые люди" в Кирове.\n\n' +
+      'Помогу передать заявку на благоустройство города нашей команде.\n\n' +
+      'Для начала — как к вам обращаться? (Имя или как вас представить)');
     return;
   }
 
-  switch (session.step) {
+  // sticker-only → nudge
+  if (attachments && attachments.length && attachments.every(a => a.type === 'sticker') && !text) {
+    const hints = {
+      start: 'Напишите что-нибудь, чтобы начать.',
+      name: 'Напишите ваше имя.',
+      address: 'Напишите адрес проблемы.',
+      problem: 'Напишите, какая проблема.',
+      idea: 'Напишите, что хотели бы видеть.',
+      media: 'Пришлите фото или напишите "нет".',
+      support: 'Напишите пару слов о поддержке.',
+      done: 'Напишите "да", если всё верно.',
+    };
+    await send(peerId, 'Пожалуйста, напишите текстовое сообщение.\n\n' + (hints[peer.step] || ''));
+    return;
+  }
+
+  switch (peer.step) {
+
     case 'start':
-      session.step = 'name';
-      session.data = {};
-      await send(peerId, greeting);
+      peer.step = 'name';
+      peer.data = {};
+      await send(peerId,
+        'Привет! Я — цифровой помощник проекта "Городские решения" партии "Новые люди" в Кирове.\n\n' +
+        'Помогу передать заявку на благоустройство города нашей команде.\n\n' +
+        'Для начала — как к вам обращаться? (Имя или как вас представить)');
       break;
 
     case 'name': {
       if (!isValidName(text)) {
-        await send(peerId,
-          'Пожалуйста, напишите ваше имя буквами.\n' +
-          'Например: Анна, Сергей, Елена'
-        );
+        await send(peerId, 'Пожалуйста, напишите ваше имя буквами.\nНапример: Анна, Сергей, Елена');
         break;
       }
-      session.data.name = text;
-      session.step = 'address';
+      peer.data.name = text;
+      peer.step = 'address';
       await send(peerId,
-        `Приятно познакомиться, ${text}! \n\n` +
+        `Приятно познакомиться, ${text}!\n\n` +
         'Напишите конкретный адрес в Кирове или Кировской области, где есть проблема.\n' +
-        'Пример: ул. Ленина, д. 10, сквер у Драмтеатра'
-      );
+        'Пример: ул. Ленина, д. 10, сквер у Драмтеатра');
       break;
     }
 
@@ -191,236 +137,196 @@ async function processMessage(sessionKey, vkUserId, text, peerId, attachments) {
         await send(peerId,
           'Пожалуйста, укажите более конкретный адрес.\n' +
           'Напишите улицу и номер дома (или название сквера/парка).\n' +
-          'Пример: ул. Ленина, д. 10, сквер у Драмтеатра'
-        );
+          'Пример: ул. Ленина, д. 10, сквер у Драмтеатра');
         break;
       }
-      session.data.address = text;
-      session.step = 'problem';
+      peer.data.address = text;
+      peer.step = 'problem';
       await send(peerId,
         'Адрес записал.\n\n' +
         'Теперь опишите суть проблемы. Что именно не так?\n' +
-        'Пример: разбитый тротуар, нет освещения, старая детская площадка, ямы на дороге'
-      );
+        'Пример: разбитый тротуар, нет освещения, старая детская площадка, ямы на дороге');
       break;
     }
 
     case 'problem': {
-      if (!isValidDescription(text)) {
+      if (!isValidDesc(text)) {
         await send(peerId,
           'Опишите проблему подробнее — что именно вас беспокоит?\n' +
-          'Например: разбитый тротуар возле дома, нет фонарей, старая детская площадка'
-        );
+          'Например: разбитый тротуар возле дома, нет фонарей, старая детская площадка');
         break;
       }
-      session.data.problem = text;
-      session.step = 'idea';
+      peer.data.problem = text;
+      peer.step = 'idea';
       await send(peerId,
         'Понял, записал.\n\n' +
         'А теперь — ваша идея. Что именно вы хотите видеть на этом месте?\n' +
-        'Например: новый тротуар, фонари, современная детская площадка, лавочки и зелень'
-      );
+        'Например: новый тротуар, фонари, современная детская площадка, лавочки и зелень');
       break;
     }
 
     case 'idea': {
-      if (!isValidDescription(text)) {
+      if (!isValidDesc(text)) {
         await send(peerId,
           'Расскажите подробнее, что вы хотели бы видеть вместо текущей ситуации.\n' +
-          'Например: новый тротуар, фонари, современная детская площадка'
-        );
+          'Например: новый тротуар, фонари, современная детская площадка');
         break;
       }
-      session.data.idea = text;
-      session.step = 'media';
+      peer.data.idea = text;
+      peer.step = 'media';
       await send(peerId,
         'Отлично, идею записал!\n\n' +
         'Если есть фото проблемного места — пришлите их сейчас (можно несколько по одному).\n' +
-        'Если нет фото — напишите "нет" или "пропустить", чтобы продолжить.'
-      );
+        'Если нет фото — напишите "нет" или "пропустить", чтобы продолжить.');
       break;
     }
 
     case 'media': {
       const skipWords = ['нет', 'нeт', 'пропустить', 'skip', 'не', 'неа', 'no', 'фото нет', 'нет фото', 'пока нет', 'нечего'];
-      const isSkip = skipWords.some(w => text.toLowerCase() === w.toLowerCase());
+      const isSkip = skipWords.includes(text.toLowerCase());
       const hasPhoto = attachments && attachments.some(a => a.type === 'photo');
-      const hasOtherAttachment = attachments && attachments.some(a => a.type !== 'photo' && a.type !== 'sticker');
+      const nonPhoto = attachments && attachments.some(a => a.type !== 'photo' && a.type !== 'sticker');
 
-      // Empty text on media step: guide user (attachment may not come through getConversations)
       if (!text && !hasPhoto && !isSkip) {
-        await send(peerId,
-          'Пришлите фото проблемного места как изображение.\n' +
-          'Если фото нет — напишите "нет" или "пропустить", и мы продолжим.'
-        );
+        await send(peerId, 'Пришлите фото как изображение или напишите "нет".');
         break;
       }
-
-      // If they sent a non-photo file
-      if (hasOtherAttachment && !hasPhoto) {
-        await send(peerId,
-          'Я могу принять только фотографии. Документы, видео и другие файлы не поддерживаются.\n\n' +
-          'Пришлите фото проблемного места или напишите "нет", чтобы продолжить.'
-        );
+      if (nonPhoto && !hasPhoto) {
+        await send(peerId, 'Я могу принять только фотографии. Пришлите фото или напишите "нет".');
         break;
       }
-
-      // Photo received
       if (hasPhoto) {
-        if (!session.data.photos) session.data.photos = [];
-        for (const att of attachments) {
-          if (att.type !== 'photo') continue;
-          session.data.photos.push({
-            type: att.type,
-            owner_id: att[att.type]?.owner_id || att.owner_id,
-            id: att[att.type]?.id || att.id,
-            access_key: att[att.type]?.access_key || att.access_key,
+        if (!peer.data.photos) peer.data.photos = [];
+        for (const a of attachments) {
+          if (a.type !== 'photo') continue;
+          peer.data.photos.push({
+            type: a.type,
+            owner_id: a[a.type]?.owner_id || a.owner_id,
+            id: a[a.type]?.id || a.id,
+            access_key: a[a.type]?.access_key || a.access_key,
           });
         }
-        await send(peerId,
-          '✅ Фото получено! (' + session.data.photos.length + ' шт.)\n\n' +
-          'Можете прислать ещё фото или написать "нет", чтобы перейти к последнему вопросу.'
-        );
+        await send(peerId, '✅ Фото получено! (' + peer.data.photos.length + ' шт.)\n\nМожете прислать ещё фото или написать "нет", чтобы продолжить.');
         break;
       }
-
-      // Skip — move to support
       if (isSkip) {
-        session.step = 'support';
-        const photoCount = session.data.photos ? session.data.photos.length : 0;
-        const photoText = photoCount > 0 ? ' (' + photoCount + ' фото приложено)' : '';
+        peer.step = 'support';
         await send(peerId,
-          'Понял' + photoText + '.\n\n' +
+          'Понял.\n\n' +
           'Последний вопрос: готовы ли соседи или актив дома поддержать инициативу?\n' +
-          'Может, уже собирали подписи или обсуждали с жильцами?'
-        );
+          'Может, уже собирали подписи или обсуждали с жильцами?');
         break;
       }
-
-      // Random text instead of photo or skip
-      await send(peerId,
-        'Я не совсем понял. Если хотите приложить фото — отправьте его как изображение.\n' +
-        'Если фото нет — напишите "нет" или "пропустить", и мы продолжим.'
-      );
+      await send(peerId, 'Я не совсем понял. Пришлите фото или напишите "нет", чтобы продолжить.');
       break;
     }
 
     case 'support': {
       if (!text || text.length < 2) {
-        await send(peerId,
-          'Напишите пару слов о поддержке соседей — это важно для заявки.\n' +
-          'Например: соседи поддерживают, собирали подписи, 10 человек за'
-        );
+        await send(peerId, 'Напишите пару слов о поддержке соседей — это важно для заявки.\nНапример: соседи поддерживают, собирали подписи, 10 человек за');
         break;
       }
-      session.data.support = text;
-      session.step = 'done';
+      peer.data.support = text;
+      peer.step = 'done';
 
       try {
-        const [user] = await api.users.get({ user_ids: vkUserId });
-        session.data.name = `${user.first_name} ${user.last_name}`;
+        const [u] = await api.users.get({ user_ids: userId });
+        peer.data.name = `${u.first_name} ${u.last_name}`;
       } catch (_) {}
+      peer.data.contact = `https://vk.com/id${userId}`;
 
-      session.data.contact = `https://vk.com/id${vkUserId}`;
-
-      const photoCount = session.data.photos ? session.data.photos.length : 0;
-      const photoLine = photoCount > 0 ? '\nФото: приложено ' + photoCount + ' шт.' : '';
-      const summary =
-        'Спасибо! Всё записал. Проверьте, пожалуйста, правильно ли я понял:\n\n' +
-        'Адрес: ' + session.data.address + '\n' +
-        'Проблема: ' + session.data.problem + '\n' +
-        'Ваша идея: ' + session.data.idea + '\n' +
-        'Поддержка соседей: ' + session.data.support +
-        photoLine + '\n\n' +
-        'Всё верно? Напишите "да" или "всё верно" для подтверждения.';
-
-      await send(peerId, summary);
+      const pn = (peer.data.photos || []).length;
+      await send(peerId,
+        'Спасибо! Всё записал. Проверьте, пожалуйста:\n\n' +
+        'Адрес: ' + peer.data.address + '\n' +
+        'Проблема: ' + peer.data.problem + '\n' +
+        'Ваша идея: ' + peer.data.idea + '\n' +
+        'Поддержка соседей: ' + peer.data.support +
+        (pn ? '\nФото: ' + pn + ' шт.' : '') +
+        '\n\nВсё верно? Напишите "да" для подтверждения.');
       break;
     }
 
     case 'done': {
-      const confirmWords = ['да', 'всё верно', 'да всё верно', 'ок', 'окей', 'подтверждаю', 'yes', 'ага', 'так точно'];
-      const isConfirm = confirmWords.some(w => text.toLowerCase().includes(w));
-
-      if (isConfirm) {
-        const entry = saveApplication(session.data);
-
-        // Reset session so user can start a new application
-        session.step = 'start';
-        session.data = {};
-
+      const confirm = ['да', 'всё верно', 'да всё верно', 'ок', 'окей', 'подтверждаю', 'yes', 'ага'].some(w => text.toLowerCase().includes(w));
+      if (confirm) {
+        const entry = saveApplication(peer.data);
+        peer.step = 'start';
+        peer.data = {};
         await send(peerId,
           '✅ Отлично! Ваша заявка №' + entry.id + ' принята!\n\n' +
           'Она передана нашей команде экспертов и куратору проекта в Кирове. ' +
           'Мы свяжемся с вами, когда начнём проработку эскиза.\n\n' +
-          'Вместе мы сделаем Киров удобнее!'
-        );
+          'Вместе мы сделаем Киров удобнее!');
       } else {
-        await send(peerId,
-          'Если всё правильно — напишите "да".\n' +
-          'Если хотите что-то исправить — напишите, что именно не так, и я помогу.'
-        );
+        await send(peerId, 'Если всё правильно — напишите "да".\nЕсли хотите что-то исправить — напишите, что именно не так.');
       }
       break;
     }
 
     default:
-      session.step = 'start';
-      session.data = {};
+      peer.step = 'start';
+      peer.data = {};
       await send(peerId, 'Напишите /start, чтобы начать новую заявку.');
   }
 }
 
-async function pollMessages() {
-  if (!initDone) return;
+// ─── polling ───────────────────────────────────────────────
+
+let ready = false;
+
+async function initStartup() {
   try {
-    const response = await api.messages.getConversations({
-      count: 20,
-      v: '5.199',
-    });
+    const res = await api.messages.getConversations({ count: 200, v: '5.199' });
+    if (res && res.items) {
+      for (const item of res.items) {
+        const m = item.last_message || item;
+        if (m && m.id && m.peer_id) {
+          getPeer(m.peer_id).lastMsgId = m.id;
+        }
+      }
+    }
+    console.log('[OK] VK API работает. Диалогов: ' + peers.size);
+  } catch (e) {
+    console.error('[ERR] VK API недоступен:', e.message);
+  }
+  ready = true;
+  console.log('✅ Бот запущен. Группа: https://vk.com/club' + GROUP_ID);
+}
 
-    if (!response || !response.items) return;
+async function poll() {
+  if (!ready) return;
+  try {
+    const res = await api.messages.getConversations({ count: 20, v: '5.199' });
+    if (!res || !res.items) return;
 
-    for (const item of response.items) {
+    // Process every conversation that has a new incoming message
+    for (const item of res.items) {
       const msg = item.last_message || item;
       if (!msg || msg.out === 1) continue;
+      if (msg.id < 0) continue;
 
-      const peerId = msg.peer_id;
-      const alreadySeen = conversationState.get(peerId) || 0;
+      const peer = getPeer(msg.peer_id);
+      if (msg.id <= peer.lastMsgId) continue;
 
-      // Пропускаем если уже обработано
-      if (msg.id <= alreadySeen) continue;
-
-      // Отмечаем как обработанное и обрабатываем ТОЛЬКО последнее сообщение
-      conversationState.set(peerId, msg.id);
-      if (msg.id > lastMessageId) lastMessageId = msg.id;
+      // Mark as seen NOW — before processing, to prevent double-processing
+      peer.lastMsgId = msg.id;
 
       const text = (msg.text || '').trim();
       const attachments = msg.attachments || [];
-      const sesh = sessions.get(peerId);
-      const hasAnyAttach = attachments && attachments.length > 0;
 
-      // Шум от нового пользователя
-      if (!sesh && (text.startsWith('[') || (!text && !hasAnyAttach))) {
-        console.log('[POLL] Шум от peer=' + peerId + ' id=' + msg.id);
-        continue;
-      }
+      // Skip obvious noise from new users
+      const hasAttach = attachments.length > 0;
+      if (text.startsWith('[') || (!text && !hasAttach)) continue;
 
-      console.log('[POLL] peer=' + peerId + ' id=' + msg.id + ' text="' + text.substring(0, 40) + '" step=' + (sesh?.step || 'new'));
-      await processMessage(peerId, msg.from_id, text, peerId, attachments);
+      console.log('[MSG] peer=' + msg.peer_id + ' id=' + msg.id + ' step=' + peer.step + ' text="' + text.substring(0, 40) + '"');
+      await processMessage(msg.peer_id, msg.from_id, text, attachments);
     }
-  } catch (err) {
-    console.error('[POLL ERROR]', err.message, err.code ? 'code=' + err.code : '');
+  } catch (e) {
+    console.error('[POLL ERR]', e.message);
   }
 }
 
-initLastMessageId().then(() => {
-  console.log('✅ Бот "Городские решения" запущен!');
-  console.log('📱 Группа: https://vk.com/club' + GROUP_ID);
-  setInterval(pollMessages, 3000);
-});
+initStartup().then(() => setInterval(poll, 3000));
 
-process.on('SIGINT', () => {
-  console.log('\n👋 Бот остановлен');
-  process.exit();
-});
+process.on('SIGINT', () => { console.log('\n👋 Бот остановлен'); process.exit(); });

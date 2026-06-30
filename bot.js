@@ -156,8 +156,8 @@ function getGreeting() {
 async function handleMessage(peerId, userId, text, attachments) {
   const peer = getPeer(peerId);
 
-  // /start → сброс
-  if (text === '/start') {
+  // /start, /stop, /начать → сброс
+  if (text === '/start' || text === '/stop' || text === '/начать') {
     peer.step = 'address';
     peer.data = { contact: `https://vk.com/id${userId}` };
     await send(peerId, getGreeting());

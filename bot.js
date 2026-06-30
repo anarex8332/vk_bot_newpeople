@@ -64,6 +64,8 @@ function saveApplication(data) {
 // Initialize with latest message to avoid re-processing old ones on restart
 let lastMessageId = 0;
 let initDone = false;
+// Track last processed message ID per conversation (peer_id)
+const conversationState = new Map();
 
 async function initLastMessageId() {
   try {
@@ -370,63 +372,63 @@ async function pollMessages() {
       v: '5.199',
     });
 
-    if (!response || !response.items) {
-      console.log('[POLL] Нет данных в ответе');
-      return;
-    }
+    if (!response || !response.items) return;
 
-    // Сначала собираем ВСЕ новые сообщения, потом обрабатываем
-    // (иначе при 2+ пользователях одно пропускается из-за lastMessageId)
-    const newMessages = [];
     for (const item of response.items) {
-      const message = item.last_message || item;
-      if (!message) continue;
-      if (message.out === 1) continue;
-      if (message.id <= lastMessageId) continue;
-      newMessages.push(message);
-    }
+      const msg = item.last_message || item;
+      if (!msg || msg.out === 1) continue;
 
-    if (newMessages.length === 0) return;
+      const peerId = msg.peer_id;
+      const alreadySeen = conversationState.get(peerId) || 0;
 
-    // Обновляем lastMessageId до максимального среди новых
-    for (const msg of newMessages) {
-      if (msg.id > lastMessageId) lastMessageId = msg.id;
-    }
+      // Пропускаем если это сообщение или более старые уже обработаны
+      if (msg.id <= alreadySeen) continue;
 
-    console.log('[POLL] ' + newMessages.length + ' новых сообщений, lastMessageId=' + lastMessageId);
-
-    for (const message of newMessages) {
-      const peerId = message.peer_id;
-      const userId = message.from_id;
-      const text = (message.text || '').trim();
-      const attachments = message.attachments || [];
-
-      console.log('[POLL] from_id=' + userId + ' peer_id=' + peerId + ' text="' + (message.text || '').substring(0, 40) + '"');
-
-      // Use peer_id for session key — it's always the user ID for 1-on-1 conversations
-      // from_id can be negative (group ID) for some system messages
-      if (userId < 0 && message.out !== 0) {
-        console.log('[POLL] Пропускаю: служебное сообщение от группы');
+      // После рестарта — запоминаем где остановились, НО не обрабатываем старые сообщения
+      if (alreadySeen === 0 && msg.id <= lastMessageId) {
+        conversationState.set(peerId, msg.id);
+        console.log('[POLL] Диалог peer=' + peerId + ' отмечен как обработанный (рестарт), последнее id=' + msg.id);
         continue;
       }
 
-      const sesh = sessions.get(peerId);
-
-      // Если есть активная сессия — обрабатываем всегда (валидация внутри)
-      if (sesh) {
-        console.log('[POLL] Есть сессия, user=' + userId + ' step=' + sesh.step);
-        await processMessage(peerId, userId, text, peerId, attachments);
-        continue;
+      // Получаем список сообщений для обработки
+      // Для новой сессии — только последнее, для существующей — всю историю
+      let histMessages;
+      if (alreadySeen === 0) {
+        histMessages = [{ id: msg.id, from_id: msg.from_id, text: msg.text || '', attachments: msg.attachments || [], out: msg.out }];
+      } else {
+        try {
+          const histRes = await api.messages.getHistory({ peer_id: peerId, count: 10, v: '5.199' });
+          histMessages = (histRes?.items || [])
+            .filter(m => !m.out && m.id > alreadySeen)
+            .reverse();
+        } catch (_) {
+          histMessages = [{ id: msg.id, from_id: msg.from_id, text: msg.text || '', attachments: msg.attachments || [], out: msg.out }];
+        }
       }
 
-      // Новый пользователь — пропускаем шум
-      const hasAnyAttach = attachments && attachments.length > 0;
-      if (text.startsWith('[') || (!text && !hasAnyAttach)) {
-        console.log('[POLL] Пропускаю шум от нового пользователя');
-        continue;
-      }
+      if (!histMessages.length) continue;
 
-      await processMessage(peerId, userId, text, peerId, attachments);
+      console.log('[POLL] peer=' + peerId + ': ' + histMessages.length + ' сообщений (state=' + alreadySeen + ')');
+
+      for (const m of histMessages) {
+        if (m.id > lastMessageId) lastMessageId = m.id;
+        if (m.id > (conversationState.get(peerId) || 0)) conversationState.set(peerId, m.id);
+
+        const text = (m.text || '').trim();
+        const attachments = m.attachments || [];
+        const sesh = sessions.get(peerId);
+
+        console.log('[POLL] from=' + m.from_id + ' text="' + text.substring(0, 40) + '" step=' + (sesh?.step || 'new'));
+
+        if (sesh) {
+          await processMessage(peerId, m.from_id, text, peerId, attachments);
+        } else {
+          const hasAnyAttach = attachments && attachments.length > 0;
+          if (text.startsWith('[') || (!text && !hasAnyAttach)) continue;
+          await processMessage(peerId, m.from_id, text, peerId, attachments);
+        }
+      }
     }
   } catch (err) {
     console.error('[POLL ERROR]', err.message, err.code ? 'code=' + err.code : '');

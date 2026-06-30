@@ -73,16 +73,7 @@ async function initLastMessageId() {
   console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
 }
 
-// Persistent keyboard — shown with EVERY message
-const KB_JSON = JSON.stringify({
-  one_time: false,
-  buttons: [[{
-    action: { type: 'text', label: 'Новая заявка', payload: '{"cmd":"start"}' },
-    color: 'positive',
-  }]],
-});
-
-async function send(peerId, msg, noKeyboard) {
+async function send(peerId, msg) {
   const params = {
     access_token: TOKEN,
     v: '5.199',
@@ -90,7 +81,6 @@ async function send(peerId, msg, noKeyboard) {
     message: msg,
     random_id: Math.floor(Math.random() * 1000000),
   };
-  if (!noKeyboard) params.keyboard = KB_JSON;
   try {
     const res = await fetch('https://api.vk.com/method/messages.send', {
       method: 'POST',
@@ -145,7 +135,7 @@ async function processMessage(userId, text, peerId, attachments) {
     'Помогу передать заявку на благоустройство города нашей команде.\n\n' +
     'Для начала — как к вам обращаться? (Имя или как вас представить)';
 
-  if (text === '/start' || text === '/начать' || text === 'Новая заявка') {
+  if (text === '/start' || text === '/начать') {
     session.step = 'name';
     session.data = {};
     await send(peerId, greeting);
@@ -344,8 +334,7 @@ async function processMessage(userId, text, peerId, attachments) {
           '✅ Отлично! Ваша заявка №' + entry.id + ' принята!\n\n' +
           'Она передана нашей команде экспертов и куратору проекта в Кирове. ' +
           'Мы свяжемся с вами, когда начнём проработку эскиза.\n\n' +
-          'Вместе мы сделаем Киров удобнее!\n\n' +
-          'Чтобы оставить новую заявку, просто напишите что-нибудь.'
+          'Вместе мы сделаем Киров удобнее!'
         );
       } else {
         await send(peerId,

@@ -37,6 +37,20 @@ async function send(peerId, msg) {
   }
 }
 
+function showConfirm(peer, peerId) {
+  const pn = (peer.data.photos || []).length;
+  send(peerId,
+    'Проверьте, всё ли верно:\n\n' +
+    'Город: ' + peer.data.city + '\n' +
+    'Адрес: ' + peer.data.address + '\n' +
+    'Проблема: ' + peer.data.problem + '\n' +
+    'Идея: ' + peer.data.idea + '\n' +
+    (pn ? 'Фото: ' + pn + ' шт.\n' : '') +
+    'Поддержка: ' + peer.data.support + '\n\n' +
+    'Всё верно? Напишите "да" для подтверждения.\n' +
+    'Чтобы исправить — напишите что именно ("город", "адрес", "проблема", "идея", "фото", "поддержка")');
+}
+
 function saveApplication(data) {
   const date = new Date().toISOString().split('T')[0];
   const file = path.join(DATA_DIR, `zayavki-${date}.json`);
@@ -198,11 +212,17 @@ async function handleMessage(peerId, userId, text, attachments) {
         break;
       }
       peer.data.city = text;
-      peer.step = 'address';
-      await send(peerId,
-        'Город записал.\n\n' +
-        'Теперь напишите точный адрес: улицу и номер дома или название места.\n' +
-        'Пример: ул. Ленина, д. 10, сквер у Драмтеатра');
+      if (peer.editing) {
+        peer.editing = false;
+        peer.step = 'confirm';
+        showConfirm(peer, peerId);
+      } else {
+        peer.step = 'address';
+        await send(peerId,
+          'Город записал.\n\n' +
+          'Теперь напишите точный адрес: улицу и номер дома или название места.\n' +
+          'Пример: ул. Ленина, д. 10, сквер у Драмтеатра');
+      }
       break;
     }
 
@@ -212,11 +232,17 @@ async function handleMessage(peerId, userId, text, attachments) {
         break;
       }
       peer.data.address = text;
-      peer.step = 'problem';
-      await send(peerId,
-        'Адрес записал.\n\n' +
-        'В чем главная проблема?\n' +
-        'Пример: разбитый асфальт, темнота во дворе, старая детская площадка');
+      if (peer.editing) {
+        peer.editing = false;
+        peer.step = 'confirm';
+        showConfirm(peer, peerId);
+      } else {
+        peer.step = 'problem';
+        await send(peerId,
+          'Адрес записал.\n\n' +
+          'В чем главная проблема?\n' +
+          'Пример: разбитый асфальт, темнота во дворе, старая детская площадка');
+      }
       break;
     }
 
@@ -226,11 +252,17 @@ async function handleMessage(peerId, userId, text, attachments) {
         break;
       }
       peer.data.problem = text;
-      peer.step = 'idea';
-      await send(peerId,
-        'Понял, записал.\n\n' +
-        'Что именно вы хотите видеть на этом месте?\n' +
-        'Например: новый тротуар, фонари, современная детская площадка, лавочки и зелень');
+      if (peer.editing) {
+        peer.editing = false;
+        peer.step = 'confirm';
+        showConfirm(peer, peerId);
+      } else {
+        peer.step = 'idea';
+        await send(peerId,
+          'Понял, записал.\n\n' +
+          'Что именно вы хотите видеть на этом месте?\n' +
+          'Например: новый тротуар, фонари, современная детская площадка, лавочки и зелень');
+      }
       break;
     }
 
@@ -240,11 +272,17 @@ async function handleMessage(peerId, userId, text, attachments) {
         break;
       }
       peer.data.idea = text;
-      peer.step = 'media';
-      await send(peerId,
-        'Отлично, идею записал!\n\n' +
-        'Пришлите фото проблемного места, если есть (можно несколько по одному).\n' +
-        'Если нет фото — напишите "нет" или "пропустить"');
+      if (peer.editing) {
+        peer.editing = false;
+        peer.step = 'confirm';
+        showConfirm(peer, peerId);
+      } else {
+        peer.step = 'media';
+        await send(peerId,
+          'Отлично, идею записал!\n\n' +
+          'Пришлите фото проблемного места, если есть (можно несколько по одному).\n' +
+          'Если нет фото — напишите "нет" или "пропустить"');
+      }
       break;
     }
 
@@ -275,11 +313,17 @@ async function handleMessage(peerId, userId, text, attachments) {
       }
 
       if (isSkip || (text && !hasPhoto)) {
-        peer.step = 'support';
-        await send(peerId,
-          'Хорошо.\n\n' +
-          'Последний вопрос: готовы ли соседи поддержать изменения?\n' +
-          'Может, уже собирали подписи или обсуждали с жильцами?');
+        if (peer.editing) {
+          peer.editing = false;
+          peer.step = 'confirm';
+          showConfirm(peer, peerId);
+        } else {
+          peer.step = 'support';
+          await send(peerId,
+            'Хорошо.\n\n' +
+            'Последний вопрос: готовы ли соседи поддержать изменения?\n' +
+            'Может, уже собирали подписи или обсуждали с жильцами?');
+        }
         break;
       }
 
@@ -300,16 +344,7 @@ async function handleMessage(peerId, userId, text, attachments) {
         peer.data.contact = `https://vk.com/id${userId} (${u.first_name} ${u.last_name})`;
       } catch (_) {}
 
-      const pn = (peer.data.photos || []).length;
-      await send(peerId,
-        'Спасибо! Проверьте, всё ли верно:\n\n' +
-        'Город: ' + peer.data.city + '\n' +
-        'Адрес: ' + peer.data.address + '\n' +
-        'Проблема: ' + peer.data.problem + '\n' +
-        'Идея: ' + peer.data.idea + '\n' +
-        (pn ? 'Фото: ' + pn + ' шт.\n' : '') +
-        'Поддержка: ' + peer.data.support + '\n\n' +
-        'Всё верно? Напишите "да" для подтверждения.');
+      showConfirm(peer, peerId);
       break;
     }
 
@@ -324,7 +359,39 @@ async function handleMessage(peerId, userId, text, attachments) {
           'Она передана команде проекта. Мы свяжемся с вами, когда начнём проработку.\n\n' +
           'Вместе сделаем Киров удобнее!');
       } else {
-        await send(peerId, 'Если всё правильно — напишите "да".\nЕсли хотите начать заново — напишите "Начать"');
+        // Check if user wants to edit a specific field
+        const fieldMap = {
+          'город': 'city', 'города': 'city', 'населённый': 'city', 'населенный': 'city',
+          'адрес': 'address', 'адреса': 'address', 'место': 'address',
+          'проблем': 'problem', 'проблему': 'problem',
+          'иде': 'idea', 'идею': 'idea',
+          'фот': 'media', 'фото': 'media',
+          'поддержк': 'support', 'поддержка': 'support', 'сосед': 'support',
+        };
+        let targetStep = null;
+        const lower = text.toLowerCase();
+        for (const [keyword, step] of Object.entries(fieldMap)) {
+          if (lower.includes(keyword)) { targetStep = step; break; }
+        }
+
+        if (targetStep) {
+          peer.step = targetStep;
+          peer.editing = true;
+          const prompts = {
+            city: 'Напишите правильный город или населённый пункт:',
+            address: 'Напишите правильный адрес:',
+            problem: 'Опишите проблему заново:',
+            idea: 'Напишите вашу идею заново:',
+            media: 'Пришлите новое фото или напишите "нет", чтобы пропустить:',
+            support: 'Напишите о поддержке соседей заново:',
+          };
+          await send(peerId, prompts[targetStep] || 'Напишите правильный ответ:');
+        } else {
+          await send(peerId,
+            'Если всё правильно — напишите "да".\n' +
+            'Если нужно что-то исправить — напишите что именно:\n' +
+            '"город", "адрес", "проблема", "идея", "фото" или "поддержка"');
+        }
       }
       break;
     }

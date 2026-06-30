@@ -1,4 +1,4 @@
-const { VK, Keyboard } = require('vk-io');
+const { VK } = require('vk-io');
 const fs = require('fs');
 const path = require('path');
 
@@ -74,33 +74,37 @@ async function initLastMessageId() {
 }
 
 // Persistent keyboard — shown with EVERY message
-let persistentKb;
-
-function getKeyboard() {
-  if (!persistentKb) {
-    persistentKb = Keyboard.keyboard([
-      Keyboard.textButton({
-        label: 'Новая заявка',
-        color: Keyboard.POSITIVE_COLOR,
-        payload: { cmd: 'start' },
-      }),
-    ]);
-  }
-  return persistentKb;
-}
+const KB_JSON = JSON.stringify({
+  one_time: false,
+  buttons: [[{
+    action: { type: 'text', label: 'Новая заявка', payload: '{"cmd":"start"}' },
+    color: 'positive',
+  }]],
+});
 
 async function send(peerId, msg, noKeyboard) {
   const params = {
+    access_token: TOKEN,
+    v: '5.199',
     peer_id: peerId,
     message: msg,
     random_id: Math.floor(Math.random() * 1000000),
   };
-  if (!noKeyboard) params.keyboard = getKeyboard(); // Pass KeyboardBuilder, NOT string
+  if (!noKeyboard) params.keyboard = KB_JSON;
   try {
-    await api.messages.send(params);
-    console.log('[SEND] peer=' + peerId + ' msg=' + msg.substring(0, 40));
+    const res = await fetch('https://api.vk.com/method/messages.send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params).toString(),
+    });
+    const data = await res.json();
+    if (data.error) {
+      console.error('[SEND ERROR] peer=' + peerId + ' code=' + data.error.error_code + ' msg=' + data.error.error_msg);
+    } else {
+      console.log('[SEND] peer=' + peerId + ' ok msg=' + msg.substring(0, 40));
+    }
   } catch (err) {
-    console.error('[SEND ERROR] peer=' + peerId + ' err=' + err.message + ' code=' + (err.code || '-'));
+    console.error('[SEND ERROR] peer=' + peerId + ' err=' + err.message);
   }
 }
 

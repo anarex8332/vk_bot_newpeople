@@ -160,8 +160,8 @@ function getGreeting() {
 async function handleMessage(peerId, userId, text, attachments) {
   const peer = getPeer(peerId);
 
-  // /start, /stop, /начать → сброс
-  if (text === '/start' || text === '/stop' || text === '/начать') {
+  // /start, /stop, /начать, Начать → сброс
+  if (text === '/start' || text === '/stop' || text === '/начать' || text.toLowerCase() === 'начать') {
     peer.step = 'city';
     peer.data = { contact: `https://vk.com/id${userId}` };
     await send(peerId, getGreeting());
@@ -324,7 +324,7 @@ async function handleMessage(peerId, userId, text, attachments) {
           'Она передана команде проекта. Мы свяжемся с вами, когда начнём проработку.\n\n' +
           'Вместе сделаем Киров удобнее!');
       } else {
-        await send(peerId, 'Если всё правильно — напишите "да".\nЕсли хотите начать заново — /start');
+        await send(peerId, 'Если всё правильно — напишите "да".\nЕсли хотите начать заново — напишите "Начать"');
       }
       break;
     }
@@ -332,7 +332,7 @@ async function handleMessage(peerId, userId, text, attachments) {
     default:
       peer.step = 'start';
       peer.data = { contact: '' };
-      await send(peerId, 'Напишите /start, чтобы начать новую заявку.');
+      await send(peerId, 'Напишите "Начать", чтобы начать новую заявку.');
   }
 }
 

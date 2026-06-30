@@ -120,8 +120,8 @@ function isValidDescription(text) {
   return text.length >= 5;
 }
 
-async function processMessage(userId, text, peerId, attachments) {
-  const session = getSession(userId);
+async function processMessage(sessionKey, vkUserId, text, peerId, attachments) {
+  const session = getSession(sessionKey);
 
   // Sticker-only message: re-prompt the current question
   if (attachments && attachments.length > 0 && attachments.every(a => a.type === 'sticker') && !text) {
@@ -308,11 +308,11 @@ async function processMessage(userId, text, peerId, attachments) {
       session.step = 'done';
 
       try {
-        const [user] = await api.users.get({ user_ids: userId });
+        const [user] = await api.users.get({ user_ids: vkUserId });
         session.data.name = `${user.first_name} ${user.last_name}`;
       } catch (_) {}
 
-      session.data.contact = `https://vk.com/id${userId}`;
+      session.data.contact = `https://vk.com/id${vkUserId}`;
 
       const photoCount = session.data.photos ? session.data.photos.length : 0;
       const photoLine = photoCount > 0 ? '\nФото: приложено ' + photoCount + ' шт.' : '';
@@ -396,19 +396,26 @@ async function pollMessages() {
     console.log('[POLL] ' + newMessages.length + ' новых сообщений, lastMessageId=' + lastMessageId);
 
     for (const message of newMessages) {
-      console.log('[POLL] Обрабатываю id=' + message.id + ' from=' + message.from_id + ' text="' + (message.text || '').substring(0, 30) + '"');
-
       const peerId = message.peer_id;
       const userId = message.from_id;
       const text = (message.text || '').trim();
       const attachments = message.attachments || [];
 
-      const sesh = sessions.get(userId);
+      console.log('[POLL] from_id=' + userId + ' peer_id=' + peerId + ' text="' + (message.text || '').substring(0, 40) + '"');
+
+      // Use peer_id for session key — it's always the user ID for 1-on-1 conversations
+      // from_id can be negative (group ID) for some system messages
+      if (userId < 0 && message.out !== 0) {
+        console.log('[POLL] Пропускаю: служебное сообщение от группы');
+        continue;
+      }
+
+      const sesh = sessions.get(peerId);
 
       // Если есть активная сессия — обрабатываем всегда (валидация внутри)
       if (sesh) {
         console.log('[POLL] Есть сессия, user=' + userId + ' step=' + sesh.step);
-        await processMessage(userId, text, peerId, attachments);
+        await processMessage(peerId, userId, text, peerId, attachments);
         continue;
       }
 
@@ -419,7 +426,7 @@ async function pollMessages() {
         continue;
       }
 
-      await processMessage(userId, text, peerId, attachments);
+      await processMessage(peerId, userId, text, peerId, attachments);
     }
   } catch (err) {
     console.error('[POLL ERROR]', err.message, err.code ? 'code=' + err.code : '');

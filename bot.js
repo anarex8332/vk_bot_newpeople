@@ -48,7 +48,7 @@ function showConfirm(peer, peerId) {
     'Идея: ' + peer.data.idea + '\n' +
     (pn ? 'Фото: ' + pn + ' шт.\n' : '') +
     'Поддержка: ' + peer.data.support + '\n\n' +
-    'Всё верно? Напишите "да" для подтверждения.\n' +
+    'Напишите любой ответ для подтверждения заявки.\n' +
     'Чтобы исправить — напишите что именно ("город", "адрес", "проблема", "идея", "фото", "поддержка")');
 }
 
@@ -193,7 +193,7 @@ async function handleMessage(peerId, userId, text, attachments) {
       idea: 'Напишите, что хотели бы видеть.',
       media: 'Пришлите фото проблемного места или напишите "нет", чтобы пропустить.',
       support: 'Напишите о поддержке соседей.',
-      confirm: 'Напишите "да", если всё верно.',
+      confirm: 'Напишите ответ для подтверждения.',
     };
     await send(peerId, 'Пожалуйста, напишите текстовое сообщение.\n\n' + (hints[peer.step] || ''));
     return;
@@ -350,8 +350,34 @@ async function handleMessage(peerId, userId, text, attachments) {
     }
 
     case 'confirm': {
-      const yes = ['да', 'всё верно', 'ок', 'окей', 'подтверждаю', 'yes', 'ага', 'да всё верно'].some(w => text.toLowerCase().includes(w));
-      if (yes) {
+      // Check if user wants to edit a specific field
+      const fieldMap = {
+        'город': 'city', 'города': 'city', 'населённый': 'city', 'населенный': 'city',
+        'адрес': 'address', 'адреса': 'address', 'место': 'address',
+        'проблем': 'problem', 'проблему': 'problem',
+        'иде': 'idea', 'идею': 'idea',
+        'фот': 'media', 'фото': 'media',
+        'поддержк': 'support', 'поддержка': 'support', 'сосед': 'support',
+      };
+      let targetStep = null;
+      const lower = text.toLowerCase();
+      for (const [keyword, step] of Object.entries(fieldMap)) {
+        if (lower.includes(keyword)) { targetStep = step; break; }
+      }
+
+      if (targetStep) {
+        peer.step = targetStep;
+        peer.editing = true;
+        const prompts = {
+          city: 'Напишите правильный город или населённый пункт:',
+          address: 'Напишите правильный адрес:',
+          problem: 'Опишите проблему заново:',
+          idea: 'Напишите вашу идею заново:',
+          media: 'Пришлите новое фото или напишите "нет", чтобы пропустить:',
+          support: 'Напишите о поддержке соседей заново:',
+        };
+        await send(peerId, prompts[targetStep] || 'Напишите правильный ответ:');
+      } else {
         const entry = saveApplication(peer.data);
         peer.step = 'start';
         peer.data = { contact: '' };
@@ -359,40 +385,6 @@ async function handleMessage(peerId, userId, text, attachments) {
           'Заявка №' + entry.id + ' принята!\n\n' +
           'Она передана команде проекта. Мы свяжемся с вами, когда начнём проработку.\n\n' +
           'Вместе сделаем Киров удобнее!');
-      } else {
-        // Check if user wants to edit a specific field
-        const fieldMap = {
-          'город': 'city', 'города': 'city', 'населённый': 'city', 'населенный': 'city',
-          'адрес': 'address', 'адреса': 'address', 'место': 'address',
-          'проблем': 'problem', 'проблему': 'problem',
-          'иде': 'idea', 'идею': 'idea',
-          'фот': 'media', 'фото': 'media',
-          'поддержк': 'support', 'поддержка': 'support', 'сосед': 'support',
-        };
-        let targetStep = null;
-        const lower = text.toLowerCase();
-        for (const [keyword, step] of Object.entries(fieldMap)) {
-          if (lower.includes(keyword)) { targetStep = step; break; }
-        }
-
-        if (targetStep) {
-          peer.step = targetStep;
-          peer.editing = true;
-          const prompts = {
-            city: 'Напишите правильный город или населённый пункт:',
-            address: 'Напишите правильный адрес:',
-            problem: 'Опишите проблему заново:',
-            idea: 'Напишите вашу идею заново:',
-            media: 'Пришлите новое фото или напишите "нет", чтобы пропустить:',
-            support: 'Напишите о поддержке соседей заново:',
-          };
-          await send(peerId, prompts[targetStep] || 'Напишите правильный ответ:');
-        } else {
-          await send(peerId,
-            'Если всё правильно — напишите "да".\n' +
-            'Если нужно что-то исправить — напишите что именно:\n' +
-            '"город", "адрес", "проблема", "идея", "фото" или "поддержка"');
-        }
       }
       break;
     }

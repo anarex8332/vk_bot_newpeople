@@ -18,6 +18,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
 // ─── helpers ───────────────────────────────────────────────
 
+function isValidCity(t)  { return t.length >= 3; }
 function isValidAddress(t)  { return t.length >= 5; }
 function isValidDescription(t) { return t.length >= 5; }
 function isValidSupport(t)  { return t.length >= 2; }
@@ -43,6 +44,7 @@ function saveApplication(data) {
     id: apps.length + 1,
     date: new Date().toISOString(),
     contact: data.contact,
+    city: data.city,
     address: data.address,
     problem: data.problem,
     idea: data.idea,
@@ -149,8 +151,8 @@ async function poll() {
 function getGreeting() {
   return 'Привет! Я помощник проекта "Новые люди" в Кирове.\n\n' +
     'Помогу передать заявку на благоустройство города.\n\n' +
-    'Напишите точный адрес в Кирове или области, где есть проблема.\n' +
-    'Например: ул. Ленина, д. 10, сквер у Драмтеатра';
+    'Напишите город или населённый пункт в Кировской области, где есть проблема.\n' +
+    'Например: Киров, Кирово-Чепецк, Слободской';
 }
 
 async function handleMessage(peerId, userId, text, attachments) {
@@ -158,7 +160,7 @@ async function handleMessage(peerId, userId, text, attachments) {
 
   // /start, /stop, /начать → сброс
   if (text === '/start' || text === '/stop' || text === '/начать') {
-    peer.step = 'address';
+    peer.step = 'city';
     peer.data = { contact: `https://vk.com/id${userId}` };
     await send(peerId, getGreeting());
     return;
@@ -168,6 +170,7 @@ async function handleMessage(peerId, userId, text, attachments) {
   if (attachments && attachments.length && attachments.every(a => a.type === 'sticker') && !text) {
     const hints = {
       start: 'Напишите что-нибудь, чтобы начать.',
+      city: 'Напишите город или населённый пункт.',
       address: 'Напишите адрес проблемы.',
       problem: 'Опишите, какая проблема.',
       idea: 'Напишите, что хотели бы видеть.',
@@ -182,10 +185,24 @@ async function handleMessage(peerId, userId, text, attachments) {
   switch (peer.step) {
 
     case 'start':
-      peer.step = 'address';
+      peer.step = 'city';
       peer.data = { contact: `https://vk.com/id${userId}` };
       await send(peerId, getGreeting());
       break;
+
+    case 'city': {
+      if (!isValidCity(text)) {
+        await send(peerId, 'Укажите город или населённый пункт.\nНапример: Киров, Кирово-Чепецк, Слободской');
+        break;
+      }
+      peer.data.city = text;
+      peer.step = 'address';
+      await send(peerId,
+        'Город записал.\n\n' +
+        'Теперь напишите точный адрес: улицу и номер дома или название места.\n' +
+        'Пример: ул. Ленина, д. 10, сквер у Драмтеатра');
+      break;
+    }
 
     case 'address': {
       if (!isValidAddress(text)) {
@@ -284,6 +301,7 @@ async function handleMessage(peerId, userId, text, attachments) {
       const pn = (peer.data.photos || []).length;
       await send(peerId,
         'Спасибо! Проверьте, всё ли верно:\n\n' +
+        'Город: ' + peer.data.city + '\n' +
         'Адрес: ' + peer.data.address + '\n' +
         'Проблема: ' + peer.data.problem + '\n' +
         'Идея: ' + peer.data.idea + '\n' +

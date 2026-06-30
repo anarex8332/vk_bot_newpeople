@@ -374,11 +374,19 @@ async function pollMessages() {
       const text = (message.text || '').trim();
       const attachments = message.attachments || [];
 
-      // Allow empty text only if user has attachments and is on media step
       const sesh = sessions.get(userId);
-      const hasPhoto = attachments.some(a => a.type === 'photo');
-      if ((text.startsWith('[') || (!text && !hasPhoto)) && sesh?.step !== 'media') {
-        console.log('[POLL] Пропускаю: начинается с [ или пустое, и не на media шаге');
+
+      // If user has an active session — always process (error handlers inside will validate)
+      if (sesh) {
+        console.log('[POLL] Есть сессия, обрабатываю');
+        await processMessage(userId, text, peerId, attachments);
+        continue;
+      }
+
+      // No session — skip messages that look like noise
+      const hasAnyAttach = attachments && attachments.length > 0;
+      if (text.startsWith('[') || (!text && !hasAnyAttach)) {
+        console.log('[POLL] Пропускаю: новый пользователь без текста');
         continue;
       }
 

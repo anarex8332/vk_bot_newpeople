@@ -6,7 +6,7 @@ const TOKEN = process.env.VK_TOKEN;
 const GROUP_ID = 239506231;
 
 if (!TOKEN) {
-  console.error('O Укажите токен: VK_TOKEN=xxx node bot.js');
+  console.error('❌ Укажите токен: VK_TOKEN=xxx node bot.js');
   process.exit(1);
 }
 
@@ -65,12 +65,24 @@ async function send(peerId, msg, keyboard) {
 
 function startKeyboard() {
   return JSON.stringify({
-    one_time: true,
+    one_time: false,
     buttons: [[{
-      action: { type: 'text', label: 'Начать', payload: '""' },
+      action: { type: 'text', label: 'Начать', payload: '{"cmd":"start"}' },
       color: 'positive',
     }]],
   });
+}
+
+function isValidName(text) {
+  return text.length >= 2 && /[а-яёa-z]/i.test(text);
+}
+
+function isValidAddress(text) {
+  return text.length >= 5;
+}
+
+function isValidDescription(text) {
+  return text.length >= 5;
 }
 
 async function processMessage(userId, text, peerId, attachments) {
@@ -95,7 +107,14 @@ async function processMessage(userId, text, peerId, attachments) {
       await send(peerId, greeting, startKeyboard());
       break;
 
-    case 'name':
+    case 'name': {
+      if (!isValidName(text)) {
+        await send(peerId,
+          'Пожалуйста, напишите ваше имя буквами.\n' +
+          'Например: Анна, Сергей, Елена'
+        );
+        break;
+      }
       session.data.name = text;
       session.step = 'address';
       await send(peerId,
@@ -104,8 +123,17 @@ async function processMessage(userId, text, peerId, attachments) {
         'Пример: ул. Ленина, д. 10, сквер у Драмтеатра'
       );
       break;
+    }
 
-    case 'address':
+    case 'address': {
+      if (!isValidAddress(text)) {
+        await send(peerId,
+          'Пожалуйста, укажите более конкретный адрес.\n' +
+          'Напишите улицу и номер дома (или название сквера/парка).\n' +
+          'Пример: ул. Ленина, д. 10, сквер у Драмтеатра'
+        );
+        break;
+      }
       session.data.address = text;
       session.step = 'problem';
       await send(peerId,
@@ -114,8 +142,16 @@ async function processMessage(userId, text, peerId, attachments) {
         'Пример: разбитый тротуар, нет освещения, старая детская площадка, ямы на дороге'
       );
       break;
+    }
 
-    case 'problem':
+    case 'problem': {
+      if (!isValidDescription(text)) {
+        await send(peerId,
+          'Опишите проблему подробнее — что именно вас беспокоит?\n' +
+          'Например: разбитый тротуар возле дома, нет фонарей, старая детская площадка'
+        );
+        break;
+      }
       session.data.problem = text;
       session.step = 'idea';
       await send(peerId,
@@ -124,23 +160,42 @@ async function processMessage(userId, text, peerId, attachments) {
         'Например: новый тротуар, фонари, современная детская площадка, лавочки и зелень'
       );
       break;
+    }
 
-    case 'idea':
+    case 'idea': {
+      if (!isValidDescription(text)) {
+        await send(peerId,
+          'Расскажите подробнее, что вы хотели бы видеть вместо текущей ситуации.\n' +
+          'Например: новый тротуар, фонари, современная детская площадка'
+        );
+        break;
+      }
       session.data.idea = text;
       session.step = 'media';
       await send(peerId,
         'Отлично, идею записал!\n\n' +
-        'Если есть фото проблемного места или другие материалы — пришлите их сейчас (можно несколько фото).\n' +
-        'Если нет — просто напишите "нет" или "пропустить".'
+        'Если есть фото проблемного места — пришлите их сейчас (можно несколько по одному).\n' +
+        'Если нет фото — напишите "нет" или "пропустить", чтобы продолжить.'
       );
       break;
+    }
 
     case 'media': {
       const skipWords = ['нет', 'нeт', 'пропустить', 'skip', 'не', 'неа', 'no', 'фото нет', 'нет фото', 'пока нет', 'нечего'];
       const isSkip = skipWords.some(w => text.toLowerCase() === w.toLowerCase());
       const hasPhoto = attachments && attachments.some(a => a.type === 'photo');
+      const hasOtherAttachment = attachments && attachments.some(a => a.type !== 'photo' && a.type !== 'sticker');
 
-      // If they sent photo (with or without text) — collect it
+      // If they sent a non-photo file
+      if (hasOtherAttachment && !hasPhoto) {
+        await send(peerId,
+          'Я могу принять только фотографии. Документы, видео и другие файлы не поддерживаются.\n\n' +
+          'Пришлите фото проблемного места или напишите "нет", чтобы продолжить.'
+        );
+        break;
+      }
+
+      // Photo received
       if (hasPhoto) {
         if (!session.data.photos) session.data.photos = [];
         for (const att of attachments) {
@@ -153,18 +208,17 @@ async function processMessage(userId, text, peerId, attachments) {
           });
         }
         await send(peerId,
-          'Фото получил! (' + session.data.photos.length + ' шт.)\n\n' +
-          'Можете прислать ещё фото или написать "нет", чтобы продолжить.'
+          '✅ Фото получено! (' + session.data.photos.length + ' шт.)\n\n' +
+          'Можете прислать ещё фото или написать "нет", чтобы перейти к последнему вопросу.'
         );
         break;
       }
 
-      // Skip — move on
-      if (isSkip || (text === '' && !hasPhoto)) {
+      // Skip — move to support
+      if (isSkip) {
         session.step = 'support';
-        const photoText = session.data.photos && session.data.photos.length > 0
-          ? ' (' + session.data.photos.length + ' фото приложено)'
-          : '';
+        const photoCount = session.data.photos ? session.data.photos.length : 0;
+        const photoText = photoCount > 0 ? ' (' + photoCount + ' фото приложено)' : '';
         await send(peerId,
           'Понял' + photoText + '.\n\n' +
           'Последний вопрос: готовы ли соседи или актив дома поддержать инициативу?\n' +
@@ -173,15 +227,22 @@ async function processMessage(userId, text, peerId, attachments) {
         break;
       }
 
-      // Unknown text
+      // Random text instead of photo or skip
       await send(peerId,
-        'Напишите "нет" или "пропустить", чтобы продолжить без фото.\n' +
-        'Или пришлите фото.'
+        'Я не совсем понял. Если хотите приложить фото — отправьте его как изображение.\n' +
+        'Если фото нет — напишите "нет" или "пропустить", и мы продолжим.'
       );
       break;
     }
 
     case 'support': {
+      if (!isValidDescription(text)) {
+        await send(peerId,
+          'Напишите пару слов о поддержке соседей — это важно для заявки.\n' +
+          'Например: соседи поддерживают, собирали подписи, 10 человек за'
+        );
+        break;
+      }
       session.data.support = text;
       session.step = 'done';
 
@@ -215,14 +276,16 @@ async function processMessage(userId, text, peerId, attachments) {
         const entry = saveApplication(session.data);
 
         await send(peerId,
-          'Отлично! Ваша заявка N' + entry.id + ' принята!\n\n' +
+          '✅ Отлично! Ваша заявка №' + entry.id + ' принята!\n\n' +
           'Она передана нашей команде экспертов и куратору проекта в Кирове. ' +
           'Мы свяжемся с вами, когда начнём проработку эскиза.\n\n' +
-          'Вместе мы сделаем Киров удобнее!'
+          'Вместе мы сделаем Киров удобнее!',
+          startKeyboard()
         );
       } else {
         await send(peerId,
-          'Понял. Что нужно исправить? Напишите правильный вариант, или просто напишите "да", если всё верно.'
+          'Если всё правильно — напишите "да".\n' +
+          'Если хотите что-то исправить — напишите, что именно не так, и я помогу.'
         );
       }
       break;
@@ -231,7 +294,7 @@ async function processMessage(userId, text, peerId, attachments) {
     default:
       session.step = 'start';
       session.data = {};
-      await send(peerId, 'Напишите /start, чтобы начать новую заявку.');
+      await send(peerId, 'Напишите /start, чтобы начать новую заявку.', startKeyboard());
   }
 }
 
@@ -246,7 +309,7 @@ async function pollMessages() {
 
     for (const item of response.items) {
       const message = item.last_message || item;
-      if (!message || !message.text || message.out === 1) continue;
+      if (!message || message.out === 1) continue;
       if (message.id <= lastMessageId) continue;
 
       lastMessageId = Math.max(lastMessageId, message.id);
@@ -268,12 +331,12 @@ async function pollMessages() {
   }
 }
 
-console.log('Бот "Городские решения" запущен!');
-console.log('Группа: https://vk.com/club' + GROUP_ID);
+console.log('✅ Бот "Городские решения" запущен!');
+console.log('📱 Группа: https://vk.com/club' + GROUP_ID);
 
 setInterval(pollMessages, 3000);
 
 process.on('SIGINT', () => {
-  console.log('\nБот остановлен');
+  console.log('\n👋 Бот остановлен');
   process.exit();
 });

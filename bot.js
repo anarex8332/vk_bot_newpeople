@@ -53,11 +53,23 @@ function saveApplication(data) {
 
 let lastMessageId = 0;
 
-async function send(peerId, msg) {
-  await api.messages.send({
+async function send(peerId, msg, keyboard) {
+  const params = {
     peer_id: peerId,
     message: msg,
     random_id: Math.floor(Math.random() * 1000000),
+  };
+  if (keyboard) params.keyboard = keyboard;
+  await api.messages.send(params);
+}
+
+function startKeyboard() {
+  return JSON.stringify({
+    one_time: true,
+    buttons: [[{
+      action: { type: 'text', label: 'Начать', payload: '""' },
+      color: 'positive',
+    }]],
   });
 }
 
@@ -72,7 +84,7 @@ async function processMessage(userId, text, peerId, attachments) {
   if (text === '/start' || text === '/начать') {
     session.step = 'name';
     session.data = {};
-    await send(peerId, greeting);
+    await send(peerId, greeting, startKeyboard());
     return;
   }
 
@@ -80,7 +92,7 @@ async function processMessage(userId, text, peerId, attachments) {
     case 'start':
       session.step = 'name';
       session.data = {};
-      await send(peerId, greeting);
+      await send(peerId, greeting, startKeyboard());
       break;
 
     case 'name':
@@ -125,11 +137,14 @@ async function processMessage(userId, text, peerId, attachments) {
 
     case 'media': {
       const skipWords = ['нет', 'нeт', 'пропустить', 'skip', 'не', 'неа', 'no', 'фото нет', 'нет фото', 'пока нет', 'нечего'];
-      const isSkip = skipWords.some(w => text.toLowerCase() === w.toLowerCase() || text.toLowerCase() === '');
+      const isSkip = skipWords.some(w => text.toLowerCase() === w.toLowerCase());
+      const hasPhoto = attachments && attachments.some(a => a.type === 'photo');
 
-      if (!isSkip && attachments && attachments.length > 0) {
+      // If they sent photo (with or without text) — collect it
+      if (hasPhoto) {
         if (!session.data.photos) session.data.photos = [];
         for (const att of attachments) {
+          if (att.type !== 'photo') continue;
           session.data.photos.push({
             type: att.type,
             owner_id: att[att.type]?.owner_id || att.owner_id,
@@ -141,7 +156,11 @@ async function processMessage(userId, text, peerId, attachments) {
           'Фото получил! (' + session.data.photos.length + ' шт.)\n\n' +
           'Можете прислать ещё фото или написать "нет", чтобы продолжить.'
         );
-      } else {
+        break;
+      }
+
+      // Skip — move on
+      if (isSkip || (text === '' && !hasPhoto)) {
         session.step = 'support';
         const photoText = session.data.photos && session.data.photos.length > 0
           ? ' (' + session.data.photos.length + ' фото приложено)'
@@ -151,7 +170,14 @@ async function processMessage(userId, text, peerId, attachments) {
           'Последний вопрос: готовы ли соседи или актив дома поддержать инициативу?\n' +
           'Может, уже собирали подписи или обсуждали с жильцами?'
         );
+        break;
       }
+
+      // Unknown text
+      await send(peerId,
+        'Напишите "нет" или "пропустить", чтобы продолжить без фото.\n' +
+        'Или пришлите фото.'
+      );
       break;
     }
 
@@ -230,7 +256,10 @@ async function pollMessages() {
       const text = (message.text || '').trim();
       const attachments = message.attachments || [];
 
-      if (text.startsWith('[') || !text) continue;
+      // Allow empty text only if user has attachments and is on media step
+      const session = sessions.get(userId);
+      const hasPhoto = attachments.some(a => a.type === 'photo');
+      if ((text.startsWith('[') || (!text && !hasPhoto)) && session?.step !== 'media') continue;
 
       await processMessage(userId, text, peerId, attachments);
     }

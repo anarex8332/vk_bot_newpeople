@@ -238,6 +238,15 @@ async function processMessage(userId, text, peerId, attachments) {
       const hasPhoto = attachments && attachments.some(a => a.type === 'photo');
       const hasOtherAttachment = attachments && attachments.some(a => a.type !== 'photo' && a.type !== 'sticker');
 
+      // Empty text on media step: guide user (attachment may not come through getConversations)
+      if (!text && !hasPhoto && !isSkip) {
+        await send(peerId,
+          'Пришлите фото проблемного места как изображение.\n' +
+          'Если фото нет — напишите "нет" или "пропустить", и мы продолжим.'
+        );
+        break;
+      }
+
       // If they sent a non-photo file
       if (hasOtherAttachment && !hasPhoto) {
         await send(peerId,
@@ -327,11 +336,16 @@ async function processMessage(userId, text, peerId, attachments) {
       if (isConfirm) {
         const entry = saveApplication(session.data);
 
+        // Reset session so user can start a new application
+        session.step = 'start';
+        session.data = {};
+
         await send(peerId,
           '✅ Отлично! Ваша заявка №' + entry.id + ' принята!\n\n' +
           'Она передана нашей команде экспертов и куратору проекта в Кирове. ' +
           'Мы свяжемся с вами, когда начнём проработку эскиза.\n\n' +
-          'Вместе мы сделаем Киров удобнее!'
+          'Вместе мы сделаем Киров удобнее!\n\n' +
+          'Чтобы оставить новую заявку, просто напишите что-нибудь.'
         );
       } else {
         await send(peerId,

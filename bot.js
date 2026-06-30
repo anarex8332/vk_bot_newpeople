@@ -113,6 +113,23 @@ function isValidDescription(text) {
 async function processMessage(userId, text, peerId, attachments) {
   const session = getSession(userId);
 
+  // Sticker-only message: re-prompt the current question
+  if (attachments && attachments.length > 0 && attachments.every(a => a.type === 'sticker') && !text) {
+    const prompts = {
+      'start': 'Напишите "Начать", чтобы оставить заявку.',
+      'name': 'Напишите ваше имя, пожалуйста.',
+      'address': 'Напишите адрес проблемы в Кирове.',
+      'problem': 'Напишите, какая проблема вас беспокоит.',
+      'idea': 'Напишите, что вы хотели бы видеть вместо этого.',
+      'media': 'Пришлите фото проблемного места или напишите "нет", если фото нет.',
+      'support': 'Напишите пару слов о поддержке соседей.',
+      'done': 'Напишите "да", если всё верно в заявке.',
+    };
+    const tip = prompts[session.step] || 'Напишите текстовое сообщение, пожалуйста.';
+    await send(peerId, '😊 Пожалуйста, напишите текстовое сообщение.\n\n' + tip);
+    return;
+  }
+
   const greeting =
     'Привет! Я — цифровой помощник проекта "Городские решения" партии "Новые люди" в Кирове.\n\n' +
     'Помогу передать заявку на благоустройство города нашей команде.\n\n' +

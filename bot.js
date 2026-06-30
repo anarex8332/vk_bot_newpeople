@@ -15,6 +15,41 @@ const api = vk.api;
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+const APPS_DIR = path.join(__dirname, 'applications');
+if (!fs.existsSync(APPS_DIR)) fs.mkdirSync(APPS_DIR);
+
+const { execSync } = require('child_process');
+
+function gitSync(entry) {
+  try {
+    const md = `applications/zayavka-${entry.id}.md`;
+    const body = [
+      '---',
+      'id: ' + entry.id,
+      'date: ' + entry.date,
+      'contact: ' + entry.contact,
+      '---',
+      '',
+      '## Заявка №' + entry.id,
+      '',
+      '📅 **Дата:** ' + new Date(entry.date).toLocaleString('ru-RU'),
+      '👤 **Контакт:** ' + entry.contact,
+      '',
+      '📍 **Город:** ' + (entry.city || '—'),
+      '📍 **Адрес:** ' + (entry.address || '—'),
+      '⚠️ **Проблема:** ' + (entry.problem || '—'),
+      '💡 **Идея:** ' + (entry.idea || '—'),
+      (entry.photos && entry.photos.length ? '📸 **Фото:** ' + entry.photos.length + ' шт.\n' : ''),
+      '👥 **Поддержка:** ' + (entry.support || '—'),
+      '',
+    ].filter(Boolean).join('\n');
+    fs.writeFileSync(path.join(__dirname, md), body);
+    execSync('git config user.name "VK Bot" && git config user.email "bot@newpeople.ru" && git add applications/ && git commit -m "заявка №' + entry.id + '" && git push', { stdio: 'pipe', timeout: 15000 });
+    console.log('[GIT] заявка №' + entry.id + ' запушена');
+  } catch (e) {
+    console.log('[GIT] не удалось запушить: ' + e.message);
+  }
+}
 
 // ─── helpers ───────────────────────────────────────────────
 
@@ -70,6 +105,7 @@ function saveApplication(data) {
   };
   apps.push(entry);
   fs.writeFileSync(file, JSON.stringify(apps, null, 2));
+  gitSync(entry);
   return entry;
 }
 

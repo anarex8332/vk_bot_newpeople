@@ -18,10 +18,11 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
 // ─── helpers ───────────────────────────────────────────────
 
-function isValidCity(t)  { return t.length >= 3; }
-function isValidAddress(t)  { return t.length >= 5; }
-function isValidDescription(t) { return t.length >= 5; }
-function isValidSupport(t)  { return t.length >= 2; }
+function hasOnlyDigits(t) { return /^\d+$/.test(t.trim()); }
+function isValidCity(t)  { return t.length >= 3 && !hasOnlyDigits(t); }
+function isValidAddress(t)  { return t.length >= 5 && !hasOnlyDigits(t); }
+function isValidDescription(t) { return t.length >= 5 && !hasOnlyDigits(t); }
+function isValidSupport(t)  { return t.length >= 2 && !hasOnlyDigits(t); }
 
 async function send(peerId, msg) {
   try {

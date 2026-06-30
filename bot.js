@@ -312,7 +312,7 @@ async function handleMessage(peerId, userId, text, attachments) {
         break;
       }
 
-      if (isSkip || (text && !hasPhoto)) {
+      if (isSkip) {
         if (peer.editing) {
           peer.editing = false;
           peer.step = 'confirm';

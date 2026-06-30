@@ -53,6 +53,7 @@ function saveApplication(data) {
 
 // Initialize with latest message to avoid re-processing old ones on restart
 let lastMessageId = 0;
+let initDone = false;
 
 async function initLastMessageId() {
   try {
@@ -60,11 +61,10 @@ async function initLastMessageId() {
     if (response && response.items && response.items[0]) {
       const msg = response.items[0].last_message || response.items[0];
       if (msg && msg.id) lastMessageId = msg.id;
-      console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
     }
-  } catch (_) {
-    console.log('⚠️ Не удалось получить последний ID сообщения');
-  }
+  } catch (_) {}
+  initDone = true;
+  console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
 }
 
 async function send(peerId, msg, keyboard) {
@@ -313,6 +313,7 @@ async function processMessage(userId, text, peerId, attachments) {
 }
 
 async function pollMessages() {
+  if (!initDone) return;
   try {
     const response = await api.messages.getConversations({
       count: 20,
@@ -347,12 +348,9 @@ async function pollMessages() {
 
 initLastMessageId().then(() => {
   console.log('✅ Бот "Городские решения" запущен!');
-}).catch(() => {
-  console.log('✅ Бот "Городские решения" запущен!');
+  console.log('📱 Группа: https://vk.com/club' + GROUP_ID);
+  setInterval(pollMessages, 3000);
 });
-console.log('📱 Группа: https://vk.com/club' + GROUP_ID);
-
-setInterval(pollMessages, 3000);
 
 process.on('SIGINT', () => {
   console.log('\n👋 Бот остановлен');

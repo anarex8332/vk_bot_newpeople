@@ -39,12 +39,20 @@ function gitSync(entry) {
       '📍 **Адрес:** ' + (entry.address || '—'),
       '⚠️ **Проблема:** ' + (entry.problem || '—'),
       '💡 **Идея:** ' + (entry.idea || '—'),
-      (entry.photos && entry.photos.length ? '📸 **Фото:** ' + entry.photos.length + ' шт.\n' : ''),
+      (entry.photos && entry.photos.length ? '📸 **Фото:** ' + entry.photos.length + ' шт.' : ''),
       '👥 **Поддержка:** ' + (entry.support || '—'),
       '',
     ].filter(Boolean).join('\n');
     fs.writeFileSync(path.join(__dirname, md), body);
-    execSync('git config user.name "VK Bot" && git config user.email "bot@newpeople.ru" && git add applications/ && git commit -m "заявка №' + entry.id + '" && git push', { stdio: 'pipe', timeout: 15000 });
+    const token = process.env.GIT_TOKEN;
+    const pushCmd = token
+      ? 'git remote set-url origin https://' + token + '@github.com/anarex8332/vk_bot_newpeople.git && git push'
+      : 'git push';
+    execSync([
+      'git config user.name "VK Bot" && git config user.email "bot@newpeople.ru"',
+      'git add applications/',
+      'git diff --cached --quiet || (git commit -m "заявка №' + entry.id + '" && ' + pushCmd + ')',
+    ].join(' && '), { stdio: 'pipe', timeout: 20000 });
     console.log('[GIT] заявка №' + entry.id + ' запушена');
   } catch (e) {
     console.log('[GIT] не удалось запушить: ' + e.message);

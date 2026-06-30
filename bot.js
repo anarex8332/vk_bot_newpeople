@@ -391,51 +391,23 @@ async function pollMessages() {
       // Пропускаем если уже обработано
       if (msg.id <= alreadySeen) continue;
 
-      // Для нового диалога — берём сообщение из getConversations
-      if (alreadySeen === 0) {
-        conversationState.set(peerId, msg.id);
-        if (msg.id > lastMessageId) lastMessageId = msg.id;
+      // Отмечаем как обработанное и обрабатываем ТОЛЬКО последнее сообщение
+      conversationState.set(peerId, msg.id);
+      if (msg.id > lastMessageId) lastMessageId = msg.id;
 
-        const text = (msg.text || '').trim();
-        const attachments = msg.attachments || [];
-        const hasAnyAttach = attachments && attachments.length > 0;
-        if (text.startsWith('[') || (!text && !hasAnyAttach)) continue;
+      const text = (msg.text || '').trim();
+      const attachments = msg.attachments || [];
+      const sesh = sessions.get(peerId);
+      const hasAnyAttach = attachments && attachments.length > 0;
 
-        console.log('[POLL] Новый диалог peer=' + peerId + ' msg=' + msg.id);
-        await processMessage(peerId, msg.from_id, text, peerId, attachments);
+      // Шум от нового пользователя
+      if (!sesh && (text.startsWith('[') || (!text && !hasAnyAttach))) {
+        console.log('[POLL] Шум от peer=' + peerId + ' id=' + msg.id);
         continue;
       }
 
-      // Существующий диалог — подтягиваем историю (между поллами могло быть несколько сообщений)
-      let histMessages;
-      try {
-        const histRes = await api.messages.getHistory({ peer_id: peerId, count: 10, v: '5.199' });
-        histMessages = (histRes?.items || []).filter(m => !m.out && m.id > alreadySeen).reverse();
-      } catch (_) {
-        histMessages = [];
-      }
-
-      if (!histMessages.length) continue;
-      console.log('[POLL] peer=' + peerId + ': ' + histMessages.length + ' сообщений (state=' + alreadySeen + ')');
-
-      for (const m of histMessages) {
-        if (m.id > lastMessageId) lastMessageId = m.id;
-        if (m.id > (conversationState.get(peerId) || 0)) conversationState.set(peerId, m.id);
-
-        const text = (m.text || '').trim();
-        const attachments = m.attachments || [];
-        const sesh = sessions.get(peerId);
-
-        console.log('[POLL] from=' + m.from_id + ' text="' + text.substring(0, 40) + '" step=' + (sesh?.step || 'new'));
-
-        if (sesh) {
-          await processMessage(peerId, m.from_id, text, peerId, attachments);
-        } else {
-          const hasAnyAttach = attachments && attachments.length > 0;
-          if (text.startsWith('[') || (!text && !hasAnyAttach)) continue;
-          await processMessage(peerId, m.from_id, text, peerId, attachments);
-        }
-      }
+      console.log('[POLL] peer=' + peerId + ' id=' + msg.id + ' text="' + text.substring(0, 40) + '" step=' + (sesh?.step || 'new'));
+      await processMessage(peerId, msg.from_id, text, peerId, attachments);
     }
   } catch (err) {
     console.error('[POLL ERROR]', err.message, err.code ? 'code=' + err.code : '');

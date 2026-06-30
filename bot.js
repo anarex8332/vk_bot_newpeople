@@ -19,7 +19,8 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 // ─── helpers ───────────────────────────────────────────────
 
 function hasOnlyDigits(t) { return /^\d+$/.test(t.trim()); }
-function isValidCity(t)  { return t.length >= 3 && !hasOnlyDigits(t); }
+function hasDigits(t) { return /\d/.test(t); }
+function isValidCity(t)  { return t.length >= 3 && !hasDigits(t); }
 function isValidAddress(t)  { return t.length >= 5 && !hasOnlyDigits(t); }
 function isValidDescription(t) { return t.length >= 5 && !hasOnlyDigits(t); }
 function isValidSupport(t)  { return t.length >= 2 && !hasOnlyDigits(t); }
@@ -193,7 +194,7 @@ async function handleMessage(peerId, userId, text, attachments) {
 
     case 'city': {
       if (!isValidCity(text)) {
-        await send(peerId, 'Укажите город или населённый пункт.\nНапример: Киров, Кирово-Чепецк, Слободской');
+        await send(peerId, 'Укажите название города буквами, без цифр.\nНапример: Киров, Кирово-Чепецк, Слободской');
         break;
       }
       peer.data.city = text;

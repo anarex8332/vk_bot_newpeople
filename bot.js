@@ -69,12 +69,19 @@ const conversationState = new Map();
 
 async function initLastMessageId() {
   try {
-    const response = await api.messages.getConversations({ count: 1, v: '5.199' });
-    if (response && response.items && response.items[0]) {
-      const msg = response.items[0].last_message || response.items[0];
-      if (msg && msg.id) lastMessageId = msg.id;
+    // Загружаем все диалоги, чтобы после рестарта не переобработать старые сообщения
+    const response = await api.messages.getConversations({ count: 200, v: '5.199' });
+    if (response && response.items) {
+      for (const item of response.items) {
+        const msg = item.last_message || item;
+        if (msg && msg.id) {
+          conversationState.set(msg.peer_id, msg.id);
+          if (msg.id > lastMessageId) lastMessageId = msg.id;
+        }
+      }
     }
     console.log('[OK] VK API работает, токен валиден');
+    console.log('[OK] Загружено диалогов: ' + conversationState.size);
   } catch (err) {
     console.error('[ОШИБКА] VK API недоступен:', err.message);
     if (err.code === 5) console.error('[ОШИБКА] Токен недействителен! Проверьте VK_TOKEN в Railway');
@@ -381,34 +388,34 @@ async function pollMessages() {
       const peerId = msg.peer_id;
       const alreadySeen = conversationState.get(peerId) || 0;
 
-      // Пропускаем если это сообщение или более старые уже обработаны
+      // Пропускаем если уже обработано
       if (msg.id <= alreadySeen) continue;
 
-      // После рестарта — запоминаем где остановились, НО не обрабатываем старые сообщения
-      if (alreadySeen === 0 && msg.id <= lastMessageId) {
+      // Для нового диалога — берём сообщение из getConversations
+      if (alreadySeen === 0) {
         conversationState.set(peerId, msg.id);
-        console.log('[POLL] Диалог peer=' + peerId + ' отмечен как обработанный (рестарт), последнее id=' + msg.id);
+        if (msg.id > lastMessageId) lastMessageId = msg.id;
+
+        const text = (msg.text || '').trim();
+        const attachments = msg.attachments || [];
+        const hasAnyAttach = attachments && attachments.length > 0;
+        if (text.startsWith('[') || (!text && !hasAnyAttach)) continue;
+
+        console.log('[POLL] Новый диалог peer=' + peerId + ' msg=' + msg.id);
+        await processMessage(peerId, msg.from_id, text, peerId, attachments);
         continue;
       }
 
-      // Получаем список сообщений для обработки
-      // Для новой сессии — только последнее, для существующей — всю историю
+      // Существующий диалог — подтягиваем историю (между поллами могло быть несколько сообщений)
       let histMessages;
-      if (alreadySeen === 0) {
-        histMessages = [{ id: msg.id, from_id: msg.from_id, text: msg.text || '', attachments: msg.attachments || [], out: msg.out }];
-      } else {
-        try {
-          const histRes = await api.messages.getHistory({ peer_id: peerId, count: 10, v: '5.199' });
-          histMessages = (histRes?.items || [])
-            .filter(m => !m.out && m.id > alreadySeen)
-            .reverse();
-        } catch (_) {
-          histMessages = [{ id: msg.id, from_id: msg.from_id, text: msg.text || '', attachments: msg.attachments || [], out: msg.out }];
-        }
+      try {
+        const histRes = await api.messages.getHistory({ peer_id: peerId, count: 10, v: '5.199' });
+        histMessages = (histRes?.items || []).filter(m => !m.out && m.id > alreadySeen).reverse();
+      } catch (_) {
+        histMessages = [];
       }
 
       if (!histMessages.length) continue;
-
       console.log('[POLL] peer=' + peerId + ': ' + histMessages.length + ' сообщений (state=' + alreadySeen + ')');
 
       for (const m of histMessages) {

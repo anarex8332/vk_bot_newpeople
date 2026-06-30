@@ -62,7 +62,13 @@ async function initLastMessageId() {
       const msg = response.items[0].last_message || response.items[0];
       if (msg && msg.id) lastMessageId = msg.id;
     }
-  } catch (_) {}
+    console.log('[OK] VK API работает, токен валиден');
+  } catch (err) {
+    console.error('[ОШИБКА] VK API недоступен:', err.message);
+    if (err.code === 5) console.error('[ОШИБКА] Токен недействителен! Проверьте VK_TOKEN в Railway');
+    if (err.code === 15) console.error('[ОШИБКА] У токена нет прав на сообщения!');
+    console.error('Бот будет работать, но может не отвечать на сообщения');
+  }
   initDone = true;
   console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
 }
@@ -74,7 +80,12 @@ async function send(peerId, msg, keyboard) {
     random_id: Math.floor(Math.random() * 1000000),
   };
   if (keyboard) params.keyboard = keyboard;
-  await api.messages.send(params);
+  try {
+    await api.messages.send(params);
+    console.log('[SEND] peer=' + peerId + ' msg=' + msg.substring(0, 40) + (keyboard ? ' [KB]' : ''));
+  } catch (err) {
+    console.error('[SEND ERROR] peer=' + peerId + ' err=' + err.message + ' code=' + (err.code || '-'));
+  }
 }
 
 function startKeyboard() {
@@ -320,14 +331,21 @@ async function pollMessages() {
       v: '5.199',
     });
 
-    if (!response || !response.items) return;
+    if (!response || !response.items) {
+      console.log('[POLL] Нет данных в ответе');
+      return;
+    }
+
+    console.log('[POLL] Получено диалогов: ' + response.items.length + ', lastMessageId=' + lastMessageId);
 
     for (const item of response.items) {
       const message = item.last_message || item;
-      if (!message || message.out === 1) continue;
-      if (message.id <= lastMessageId) continue;
+      if (!message) { console.log('[POLL] Пропускаю: нет сообщения'); continue; }
+      if (message.out === 1) { console.log('[POLL] Пропускаю: исходящее от бота, id=' + message.id); continue; }
+      if (message.id <= lastMessageId) { console.log('[POLL] Пропускаю: старое, id=' + message.id + ' <= ' + lastMessageId); continue; }
 
       lastMessageId = Math.max(lastMessageId, message.id);
+      console.log('[POLL] НОВОЕ СООБЩЕНИЕ id=' + message.id + ' from=' + message.from_id + ' text="' + (message.text || '').substring(0, 30) + '"');
 
       const peerId = message.peer_id;
       const userId = message.from_id;
@@ -335,14 +353,18 @@ async function pollMessages() {
       const attachments = message.attachments || [];
 
       // Allow empty text only if user has attachments and is on media step
-      const session = sessions.get(userId);
+      const sesh = sessions.get(userId);
       const hasPhoto = attachments.some(a => a.type === 'photo');
-      if ((text.startsWith('[') || (!text && !hasPhoto)) && session?.step !== 'media') continue;
+      if ((text.startsWith('[') || (!text && !hasPhoto)) && sesh?.step !== 'media') {
+        console.log('[POLL] Пропускаю: начинается с [ или пустое, и не на media шаге');
+        continue;
+      }
 
+      console.log('[POLL] Обрабатываю сообщение от user=' + userId + ' step=' + (sesh?.step || 'new'));
       await processMessage(userId, text, peerId, attachments);
     }
   } catch (err) {
-    // Ignore polling errors
+    console.error('[POLL ERROR]', err.message, err.code ? 'code=' + err.code : '');
   }
 }
 

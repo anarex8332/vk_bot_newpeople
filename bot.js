@@ -383,7 +383,8 @@ async function handleMessage(peerId, userId, text, attachments) {
         peer.data = { contact: '' };
         await send(peerId,
           'Заявка №' + entry.id + ' принята!\n\n' +
-          'Она передана команде проекта. Мы свяжемся с вами, когда начнём проработку.\n\n' +
+          'Она передана команде проекта.\n' +
+          'По оставшимся вопросам — https://vk.com/a1629\n\n' +
           'Вместе сделаем Киров удобнее!');
       }
       break;

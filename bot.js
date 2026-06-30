@@ -1,4 +1,4 @@
-const { VK } = require('vk-io');
+const { VK, Keyboard } = require('vk-io');
 const fs = require('fs');
 const path = require('path');
 
@@ -73,29 +73,35 @@ async function initLastMessageId() {
   console.log('📬 Последнее обработанное сообщение ID:', lastMessageId);
 }
 
-async function send(peerId, msg, keyboard) {
+// Persistent keyboard — shown with EVERY message
+let persistentKb;
+
+function getKeyboard() {
+  if (!persistentKb) {
+    persistentKb = Keyboard.keyboard([
+      Keyboard.textButton({
+        label: 'Новая заявка',
+        color: Keyboard.POSITIVE_COLOR,
+        payload: { cmd: 'start' },
+      }),
+    ]);
+  }
+  return persistentKb;
+}
+
+async function send(peerId, msg, noKeyboard) {
   const params = {
     peer_id: peerId,
     message: msg,
     random_id: Math.floor(Math.random() * 1000000),
   };
-  if (keyboard) params.keyboard = keyboard;
+  if (!noKeyboard) params.keyboard = getKeyboard(); // Pass KeyboardBuilder, NOT string
   try {
     await api.messages.send(params);
-    console.log('[SEND] peer=' + peerId + ' msg=' + msg.substring(0, 40) + (keyboard ? ' [KB]' : ''));
+    console.log('[SEND] peer=' + peerId + ' msg=' + msg.substring(0, 40));
   } catch (err) {
     console.error('[SEND ERROR] peer=' + peerId + ' err=' + err.message + ' code=' + (err.code || '-'));
   }
-}
-
-function startKeyboard() {
-  return JSON.stringify({
-    one_time: false,
-    buttons: [[{
-      action: { type: 'text', label: 'Начать', payload: '{"cmd":"start"}' },
-      color: 'positive',
-    }]],
-  });
 }
 
 function isValidName(text) {
@@ -138,7 +144,7 @@ async function processMessage(userId, text, peerId, attachments) {
   if (text === '/start' || text === '/начать') {
     session.step = 'name';
     session.data = {};
-    await send(peerId, greeting, startKeyboard());
+    await send(peerId, greeting);
     return;
   }
 
@@ -146,7 +152,7 @@ async function processMessage(userId, text, peerId, attachments) {
     case 'start':
       session.step = 'name';
       session.data = {};
-      await send(peerId, greeting, startKeyboard());
+      await send(peerId, greeting);
       break;
 
     case 'name': {
@@ -321,8 +327,7 @@ async function processMessage(userId, text, peerId, attachments) {
           '✅ Отлично! Ваша заявка №' + entry.id + ' принята!\n\n' +
           'Она передана нашей команде экспертов и куратору проекта в Кирове. ' +
           'Мы свяжемся с вами, когда начнём проработку эскиза.\n\n' +
-          'Вместе мы сделаем Киров удобнее!',
-          startKeyboard()
+          'Вместе мы сделаем Киров удобнее!'
         );
       } else {
         await send(peerId,
@@ -336,7 +341,7 @@ async function processMessage(userId, text, peerId, attachments) {
     default:
       session.step = 'start';
       session.data = {};
-      await send(peerId, 'Напишите /start, чтобы начать новую заявку.', startKeyboard());
+      await send(peerId, 'Напишите /start, чтобы начать новую заявку.');
   }
 }
 

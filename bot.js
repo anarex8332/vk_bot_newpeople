@@ -145,7 +145,7 @@ async function processMessage(userId, text, peerId, attachments) {
     'Помогу передать заявку на благоустройство города нашей команде.\n\n' +
     'Для начала — как к вам обращаться? (Имя или как вас представить)';
 
-  if (text === '/start' || text === '/начать') {
+  if (text === '/start' || text === '/начать' || text === 'Новая заявка') {
     session.step = 'name';
     session.data = {};
     await send(peerId, greeting);

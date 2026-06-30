@@ -20,7 +20,8 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
 function hasOnlyDigits(t) { return /^\d+$/.test(t.trim()); }
 function hasDigits(t) { return /\d/.test(t); }
-function isValidCity(t)  { return t.length >= 3 && !hasDigits(t); }
+function hasLetters(t) { return /[а-яёa-z]/i.test(t); }
+function isValidCity(t)  { return t.length >= 3 && !hasDigits(t) && hasLetters(t); }
 function isValidAddress(t)  { return t.length >= 5 && !hasOnlyDigits(t); }
 function isValidDescription(t) { return t.length >= 5 && !hasOnlyDigits(t); }
 function isValidSupport(t)  { return t.length >= 2 && !hasOnlyDigits(t); }

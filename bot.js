@@ -17,12 +17,22 @@ const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
 const sessions = new Map();
+const SESSION_TTL = 30 * 60 * 1000; // 30 минут
 
 function getSession(userId) {
-  if (!sessions.has(userId)) {
-    sessions.set(userId, { step: 'start', data: {} });
+  const existing = sessions.get(userId);
+  if (existing) {
+    // Проверяем, не протухла ли сессия
+    if (Date.now() - existing.ts > SESSION_TTL) {
+      sessions.delete(userId);
+    } else {
+      existing.ts = Date.now(); // продлеваем
+      return existing;
+    }
   }
-  return sessions.get(userId);
+  const session = { step: 'start', data: {}, ts: Date.now() };
+  sessions.set(userId, session);
+  return session;
 }
 
 function saveApplication(data) {
@@ -365,16 +375,28 @@ async function pollMessages() {
       return;
     }
 
-    console.log('[POLL] Получено диалогов: ' + response.items.length + ', lastMessageId=' + lastMessageId);
-
+    // Сначала собираем ВСЕ новые сообщения, потом обрабатываем
+    // (иначе при 2+ пользователях одно пропускается из-за lastMessageId)
+    const newMessages = [];
     for (const item of response.items) {
       const message = item.last_message || item;
-      if (!message) { console.log('[POLL] Пропускаю: нет сообщения'); continue; }
-      if (message.out === 1) { console.log('[POLL] Пропускаю: исходящее от бота, id=' + message.id); continue; }
-      if (message.id <= lastMessageId) { console.log('[POLL] Пропускаю: старое, id=' + message.id + ' <= ' + lastMessageId); continue; }
+      if (!message) continue;
+      if (message.out === 1) continue;
+      if (message.id <= lastMessageId) continue;
+      newMessages.push(message);
+    }
 
-      lastMessageId = Math.max(lastMessageId, message.id);
-      console.log('[POLL] НОВОЕ СООБЩЕНИЕ id=' + message.id + ' from=' + message.from_id + ' text="' + (message.text || '').substring(0, 30) + '"');
+    if (newMessages.length === 0) return;
+
+    // Обновляем lastMessageId до максимального среди новых
+    for (const msg of newMessages) {
+      if (msg.id > lastMessageId) lastMessageId = msg.id;
+    }
+
+    console.log('[POLL] ' + newMessages.length + ' новых сообщений, lastMessageId=' + lastMessageId);
+
+    for (const message of newMessages) {
+      console.log('[POLL] Обрабатываю id=' + message.id + ' from=' + message.from_id + ' text="' + (message.text || '').substring(0, 30) + '"');
 
       const peerId = message.peer_id;
       const userId = message.from_id;
@@ -383,21 +405,20 @@ async function pollMessages() {
 
       const sesh = sessions.get(userId);
 
-      // If user has an active session — always process (error handlers inside will validate)
+      // Если есть активная сессия — обрабатываем всегда (валидация внутри)
       if (sesh) {
-        console.log('[POLL] Есть сессия, обрабатываю');
+        console.log('[POLL] Есть сессия, user=' + userId + ' step=' + sesh.step);
         await processMessage(userId, text, peerId, attachments);
         continue;
       }
 
-      // No session — skip messages that look like noise
+      // Новый пользователь — пропускаем шум
       const hasAnyAttach = attachments && attachments.length > 0;
       if (text.startsWith('[') || (!text && !hasAnyAttach)) {
-        console.log('[POLL] Пропускаю: новый пользователь без текста');
+        console.log('[POLL] Пропускаю шум от нового пользователя');
         continue;
       }
 
-      console.log('[POLL] Обрабатываю сообщение от user=' + userId + ' step=' + (sesh?.step || 'new'));
       await processMessage(userId, text, peerId, attachments);
     }
   } catch (err) {

@@ -18,18 +18,11 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 const APPS_DIR = path.join(__dirname, 'applications');
 if (!fs.existsSync(APPS_DIR)) fs.mkdirSync(APPS_DIR);
 
-const { execSync } = require('child_process');
-
-function gitSync(entry) {
+async function gitSync(entry) {
+  const token = process.env.GIT_TOKEN;
+  if (!token) return;
   try {
-    const md = `applications/zayavka-${entry.id}.md`;
     const body = [
-      '---',
-      'id: ' + entry.id,
-      'date: ' + entry.date,
-      'contact: ' + entry.contact,
-      '---',
-      '',
       '## Заявка №' + entry.id,
       '',
       '📅 **Дата:** ' + new Date(entry.date).toLocaleString('ru-RU'),
@@ -42,20 +35,33 @@ function gitSync(entry) {
       (entry.photos && entry.photos.length ? '📸 **Фото:** ' + entry.photos.length + ' шт.' : ''),
       '👥 **Поддержка:** ' + (entry.support || '—'),
       '',
-    ].filter(Boolean).join('\n');
-    fs.writeFileSync(path.join(__dirname, md), body);
-    const token = process.env.GIT_TOKEN;
-    const pushCmd = token
-      ? 'git remote set-url origin https://' + token + '@github.com/anarex8332/vk_bot_newpeople.git && git push'
-      : 'git push';
-    execSync([
-      'git config user.name "VK Bot" && git config user.email "bot@newpeople.ru"',
-      'git add applications/',
-      'git diff --cached --quiet || (git commit -m "заявка №' + entry.id + '" && ' + pushCmd + ')',
-    ].join(' && '), { stdio: 'pipe', timeout: 20000 });
-    console.log('[GIT] заявка №' + entry.id + ' запушена');
+      '---',
+      'id: ' + entry.id,
+      'date: ' + entry.date,
+      'contact: ' + entry.contact,
+      'city: ' + (entry.city || ''),
+      'address: ' + (entry.address || ''),
+      'problem: ' + (entry.problem || ''),
+      'idea: ' + (entry.idea || ''),
+      'support: ' + (entry.support || ''),
+    ].join('\n');
+    const path = 'applications/zayavka-' + entry.id + '.md';
+    const res = await fetch('https://api.github.com/repos/anarex8332/vk_bot_newpeople/contents/' + path, {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json',
+      },
+      body: JSON.stringify({
+        message: 'заявка №' + entry.id,
+        content: Buffer.from(body).toString('base64'),
+      }),
+    });
+    if (res.ok) console.log('[GIT] заявка №' + entry.id + ' запушена');
+    else console.log('[GIT] ошибка: ' + res.status + ' ' + (await res.text()).substring(0, 100));
   } catch (e) {
-    console.log('[GIT] не удалось запушить: ' + e.message);
+    console.log('[GIT] не удалось: ' + e.message);
   }
 }
 
